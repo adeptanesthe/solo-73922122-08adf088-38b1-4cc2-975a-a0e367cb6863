@@ -70,8 +70,13 @@ class Node:
 
 @dataclass(frozen=True)
 class Leaf:
-    """叶子节点：合格概率（与 sklearn predict_proba 完全一致的精确有理数）。"""
+    """叶子节点：合格概率（与 sklearn predict_proba 完全一致的精确有理数）。
+
+    n_train 为该叶节点上的训练样本数（sklearn tree_.n_node_samples），
+    送检选样按其倒数计算覆盖收益。
+    """
     prob1: Fraction
+    n_train: int
 
 
 @dataclass(frozen=True)
@@ -116,7 +121,12 @@ def extract_forest(clf: RandomForestClassifier) -> ForestSpec:
         for nid in range(t.node_count):
             left, right = int(t.children_left[nid]), int(t.children_right[nid])
             if left == right:  # sklearn 用 left == right（均为 -1）表示叶子
-                nodes.append(Leaf(prob1=_leaf_prob1_exact(t.value[nid][0])))
+                nodes.append(
+                    Leaf(
+                        prob1=_leaf_prob1_exact(t.value[nid][0]),
+                        n_train=int(t.n_node_samples[nid]),
+                    )
+                )
             else:
                 nodes.append(
                     Node(

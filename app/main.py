@@ -24,6 +24,7 @@ from .model import (
     train_model,
 )
 from .samples import build_samples
+from .selection import SelectionInput, select
 from .solver import SolveInput, solve
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -96,6 +97,67 @@ def api_solve(payload: dict) -> dict:
 @app.get("/api/samples")
 def api_samples() -> dict:
     return SAMPLES
+
+
+@app.get("/api/leaves")
+def api_leaves() -> dict:
+    """全森林叶节点目录：编号、所属树、训练样本数与覆盖收益（1/n_train）。"""
+    from .selection import get_registry
+
+    reg = get_registry(FOREST)
+    return {
+        "n_leaves": reg.n_leaves,
+        "leaves": [
+            {"index": i, "tree": x.tree, "node": x.node,
+             "n_train": x.n_train, "weight": float(x.weight)}
+            for i, x in enumerate(reg.leaves)
+        ],
+    }
+
+
+def _as_int_matrix(key, payload):
+    """把 payload[key] 归一化为整数矩阵；无法归一化的元素原样保留，由校验报错。"""
+    v = payload.get(key)
+    if not isinstance(v, (list, tuple)):
+        return []
+    rows = []
+    for row in v:
+        if not isinstance(row, (list, tuple)):
+            rows.append([])
+            continue
+        out = []
+        for x in row:
+            if isinstance(x, bool):
+                out.append(x)  # 校验阶段拒绝 bool
+            elif isinstance(x, int):
+                out.append(x)
+            elif isinstance(x, float) and x.is_integer():
+                out.append(int(x))
+            else:
+                out.append(x)
+        rows.append(out)
+    return rows
+
+
+@app.post("/api/select")
+def api_select(payload: dict) -> dict:
+    slots = payload.get("slots")
+    if isinstance(slots, bool):
+        pass  # bool 原样传入，校验阶段拒绝
+    elif isinstance(slots, float) and slots.is_integer():
+        slots = int(slots)
+    # 其余情形（None、字符串、越界数字等）原样传入，由 validate_selection 报错
+    inp = SelectionInput(
+        tested=_as_int_matrix("tested", payload),
+        candidates=_as_int_matrix("candidates", payload),
+        slots=slots,
+    )
+    return select(FOREST, inp).to_dict()
+
+
+@app.get("/select", include_in_schema=False)
+def select_page():
+    return FileResponse(STATIC_DIR / "select.html")
 
 
 @app.get("/", include_in_schema=False)

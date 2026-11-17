@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>送检选样 · 再生塑料配方</title>
+<style>
+  :root { --ink:#1f2933; --muted:#6b7280; --line:#d8dee6; --ok:#0f7b3d; --bad:#b42318; --warn:#9a6700; --bg:#f6f8fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "PingFang SC","Microsoft YaHei",system-ui,sans-serif; color:var(--ink); background:var(--bg); }
+  header { background:#123c69; color:#fff; padding:14px 22px; }
+  header h1 { margin:0; font-size:19px; }
+  header p { margin:4px 0 0; font-size:12.5px; opacity:.85; }
+  header nav { margin-top:8px; font-size:13px; }
+  header nav a { color:#cfe0f5; margin-right:14px; text-decoration:none; }
+  header nav a.cur { color:#fff; font-weight:600; text-decoration:underline; }
+  main { max-width: 1080px; margin: 18px auto 60px; padding: 0 16px; }
+  section { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+  h2 { font-size:15px; margin:0 0 12px; }
+  h2 .hint { font-size:12px; color:var(--muted); font-weight:400; margin-left:8px; }
+  table { border-collapse: collapse; width:100%; }
+  th, td { padding:6px 8px; text-align:center; font-size:13px; }
+  th { color:var(--muted); font-weight:600; border-bottom:2px solid var(--line); }
+  td { border-bottom:1px solid #eef1f4; }
+  input[type=number] { width:78px; padding:5px 6px; border:1px solid var(--line); border-radius:6px; font-size:13px; text-align:right; }
+  input[type=number]:focus { outline:2px solid #123c6933; border-color:#123c69; }
+  input.invalid { outline:2px solid #b4231855; border-color:var(--bad); }
+  textarea { width:100%; min-height:64px; border:1px solid var(--line); border-radius:6px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; padding:8px; }
+  .rowline { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-top:10px; font-size:13px; color:var(--muted); }
+  .rowline b.bad, td b.bad { color:var(--bad); }
+  .btns { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+  button { padding:9px 18px; border-radius:8px; border:1px solid #123c69; background:#123c69; color:#fff; font-size:14px; cursor:pointer; }
+  button.ghost { background:#fff; color:#123c69; }
+  button.small { padding:4px 10px; font-size:12.5px; }
+  button:disabled { opacity:.55; cursor:default; }
+  #status { min-height: 26px; font-size:13.5px; margin: 10px 0 2px; color:var(--muted); }
+  #status .spin { display:inline-block; width:13px; height:13px; border:2px solid #123c6933; border-top-color:#123c69; border-radius:50%; animation:sp 0.8s linear infinite; vertical-align:-2px; margin-right:6px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  .panel { border-radius:10px; padding:14px 16px; margin-top:10px; font-size:13.5px; display:none; }
+  .panel.ok { display:block; background:#eef4fb; border:1px solid #c3d8f0; }
+  .panel.norec { display:block; background:#f1f3f5; border:1px solid var(--line); }
+  .panel.pending { display:block; background:#fdf6e4; border:1px solid #ecd9a0; }
+  .panel.invalid { display:block; background:#fdf0ee; border:1px solid #f2c7c1; }
+  .panel h3 { margin:0 0 8px; font-size:14.5px; }
+  .panel.ok h3 { color:#123c69; } .panel.norec h3 { color:var(--ink); }
+  .panel.pending h3 { color:var(--warn); } .panel.invalid h3 { color:var(--bad); }
+  .kv { margin:3px 0; }
+  .kv b { font-weight:600; }
+  .note { font-size:12.5px; color:var(--muted); margin-top:8px; line-height:1.6; }
+  code { background:#eef1f4; padding:1px 5px; border-radius:4px; }
+  .leafgrid { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:6px; margin-top:8px; }
+  .leafchip { font-size:12px; background:#fff; border:1px solid #c3d8f0; border-radius:6px; padding:5px 8px; }
+  .leafchip b { color:#123c69; }
+  .del { color:var(--bad); cursor:pointer; border:1px solid var(--line); background:#fff; border-radius:5px; padding:1px 7px; font-size:12px; }
+  .addrow { color:#123c69; cursor:pointer; border:1px dashed #123c6966; background:#fff; border-radius:6px; padding:3px 12px; font-size:12.5px; margin-top:8px; }
+  .tblwrap { max-height:340px; overflow-y:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>送检选样 · 叶节点覆盖收益最大化</h1>
+  <p id="metaLine">模型加载中…</p>
+  <nav>
+    <a href="/">试配求解</a>
+    <a href="/select" class="cur">送检选样</a>
+  </nav>
+</header>
+<main>
+  <section>
+    <h2>1. 已检配方（0～20 条，总重 1000 克的四料整数克数）<span class="hint">已检配方覆盖的叶不再计入收益</span></h2>
+    <div class="tblwrap">
+      <table id="testedTable">
+        <thead><tr><th>#</th><th class="fn0">原料1（克）</th><th class="fn1">原料2（克）</th><th class="fn2">原料3（克）</th><th class="fn3">原料4（克）</th><th>总重</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <button class="addrow" id="addTested">＋ 增加已检配方</button>
+    <div class="rowline" id="testedCount"></div>
+  </section>
+
+  <section>
+    <h2>2. 待检配方（10～60 条）<span class="hint">同一叶被多条命中只计一次</span></h2>
+    <div class="tblwrap">
+      <table id="candTable">
+        <thead><tr><th>#</th><th class="fn0">原料1（克）</th><th class="fn1">原料2（克）</th><th class="fn2">原料3（克）</th><th class="fn3">原料4（克）</th><th>总重</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <button class="addrow" id="addCand">＋ 增加待检配方</button>
+    <div class="rowline" id="candCount"></div>
+  </section>
+
+  <section>
+    <h2>3. 送检名额与批量录入</h2>
+    <div class="rowline">
+      <label>送检名额（1～5）：<input type="number" id="slots" min="1" max="5" step="1" value="3" style="width:90px"></label>
+    </div>
+    <div class="rowline" style="align-items:flex-start; flex-direction:column; gap:6px;">
+      <label style="color:var(--ink)">批量粘贴（每行一条，4 个整数，空格/逗号分隔；追加到待检配方）：
+        <textarea id="bulk" placeholder="250,250,350,150&#10;300 200 350 150"></textarea>
+      </label>
+      <div class="btns" style="margin-top:4px">
+        <button class="ghost small" id="bulkBtn">追加到待检配方</button>
+        <button class="ghost small" id="clearCandBtn">清空待检配方</button>
+      </div>
+    </div>
+    <div class="btns">
+      <button id="runBtn">计算最优送检组合</button>
+      <button class="ghost" id="sampleBtn">载入演示样例（有增量）</button>
+      <button class="ghost" id="noGainBtn">载入演示样例（无增量）</button>
+    </div>
+    <div class="note">
+      收益规则：叶收益 = 1 / 该叶训练样本数；已检叶不计入；同叶去重；名额内取总收益最高、同分送检数最少的组合。
+      修改任何配方或名额都会立即撤下旧建议并中止在途请求，迟到结果不会恢复。
+    </div>
+  </section>
+
+  <section>
+    <h2>4. 选样结果</h2>
+    <div id="status">尚未计算。</div>
+    <div class="panel ok" id="panelOk">
+      <h3>推荐送检组合（已穷举证明最优）</h3>
+      <div class="kv">送检条数：<b id="okK"></b> ／ 名额 <b id="okSlots"></b></div>
+      <div class="kv">增量覆盖叶节点：<b id="okLeafN"></b> 个　增量收益：<b id="okBen"></b>（精确分数 <span id="okBenExact"></span>）</div>
+      <table style="margin-top:8px">
+        <thead><tr><th>待检序号</th><th>原料1</th><th>原料2</th><th>原料3</th><th>原料4</th></tr></thead>
+        <tbody id="okRows"></tbody>
+      </table>
+      <div class="kv" style="margin-top:8px">增量覆盖叶明细（树-节点 · 训练样本数 · 1/n）：</div>
+      <div class="leafgrid" id="okLeaves"></div>
+      <div class="kv" style="margin-top:8px" id="okReason"></div>
+    </div>
+    <div class="panel norec" id="panelNoRec">
+      <h3>不推荐送检</h3>
+      <div class="kv" id="noRecReason"></div>
+    </div>
+    <div class="panel pending" id="panelPending">
+      <h3>待定（未能证明最优）</h3>
+      <div class="kv" id="pendingReason"></div>
+    </div>
+    <div class="panel invalid" id="panelInvalid">
+      <h3>输入不合法</h3>
+      <div class="kv" id="invalidReason"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const TOTAL = 1000;
+const LIMITS = { tested: [0, 20], cand: [10, 60], slots: [1, 5] };
+let featureNames = ["原料1","原料2","原料3","原料4"];
+let samples = null;
+
+// ---- 结果撤回机制：epoch + AbortController（与试配页同构）----
+let epoch = 0;
+let inflight = null;
+const $ = id => document.getElementById(id);
+
+// ---- 数据模型：两张表各维护一个 4 元组数组，DOM 由数据渲染 ----
+let testedRows = [];   // [[g1,g2,g3,g4|null], ...]
+let candRows = [];
+
+function emptyRow() { return [null, null, null, null]; }
+
+function renderTable(tbodyId, rows) {
+  const tbody = document.querySelector("#" + tbodyId + " tbody");
+  tbody.innerHTML = "";
+  rows.forEach((row, idx) => {
+    const tr = document.createElement("tr");
+    tr.dataset.idx = String(idx);
+    let cells = `<td>${idx + 1}</td>`;
+    for (let c = 0; c < 4; c++) {
+      cells += `<td><input type="number" min="0" max="${TOTAL}" step="1" data-col="${c}" value="${row[c] === null ? "" : row[c]}"></td>`;
+    }
+    const sum = row.every(v => v !== null) ? row.reduce((a, b) => a + b, 0) : null;
+    const sumBad = sum !== null && sum !== TOTAL;
+    cells += `<td class="sumcell ${sumBad ? "badsum" : ""}">${sum === null ? "—" : (sum === TOTAL ? sum : "<b class='bad'>" + sum + "</b>")}</td>`;
+    cells += `<td><span class="del" data-del="1">删除</span></td>`;
+    tr.innerHTML = cells;
+    tr.querySelectorAll("input").forEach(inp => {
+      inp.addEventListener("input", onUserEdit);
+      inp.addEventListener("change", onUserEdit);
+    });
+    tr.querySelector("[data-del]").addEventListener("click", () => {
+      // 删除前先把当前 DOM 输入同步回数据模型，避免重渲染丢失其它行的在途编辑
+      syncFromDom(testedRows, "testedTable");
+      syncFromDom(candRows, "candTable");
+      rows.splice(idx, 1);
+      onUserEdit();
+      renderAll();
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function syncFromDom(rows, tbodyId) {
+  const trs = document.querySelectorAll("#" + tbodyId + " tbody tr");
+  trs.forEach((tr, idx) => {
+    const inputs = tr.querySelectorAll("input");
+    inputs.forEach(inp => {
+      const c = Number(inp.dataset.col);
+      const s = inp.value.trim();
+      rows[idx][c] = s === "" ? null : Number(s);
+    });
+  });
+}
+
+function renderAll() {
+  renderTable("testedTable", testedRows, "t");
+  renderTable("candTable", candRows, "c");
+  updateCounts();
+}
+
+function updateCounts() {
+  const tBad = testedRows.length < LIMITS.tested[0] || testedRows.length > LIMITS.tested[1];
+  const cBad = candRows.length < LIMITS.cand[0] || candRows.length > LIMITS.cand[1];
+  $("testedCount").innerHTML = `已检 ${testedRows.length} 条（限 ${LIMITS.tested[0]}～${LIMITS.tested[1]}）` +
+    (tBad ? "　<b class='bad'>数量超出允许范围</b>" : "");
+  $("candCount").innerHTML = `待检 ${candRows.length} 条（限 ${LIMITS.cand[0]}～${LIMITS.cand[1]}）` +
+    (cBad ? "　<b class='bad'>数量超出允许范围</b>" : "");
+}
+
+function onUserEdit() {
+  epoch++;
+  if (inflight) { inflight.abort(); inflight = null; }
+  $("runBtn").disabled = false;
+  hidePanels();
+  $("status").textContent = "输入已修改，旧建议已撤下。请重新计算。";
+  // 同步并重渲染总重/计数（保留焦点由调用方决定；编辑事件只刷新统计列）
+  syncFromDom(testedRows, "testedTable");
+  syncFromDom(candRows, "candTable");
+  updateCounts();
+  document.querySelectorAll(".sumcell").forEach(cell => {
+    const tr = cell.parentElement;
+    const inputs = tr.querySelectorAll("input");
+    const vals = Array.from(inputs).map(i => i.value.trim() === "" ? null : Number(i.value));
+    if (vals.some(v => v === null || !Number.isInteger(v) || v < 0 || v > TOTAL)) {
+      cell.innerHTML = "—";
+    } else {
+      const sum = vals.reduce((a, b) => a + b, 0);
+      cell.innerHTML = sum === TOTAL ? String(sum) : "<b class='bad'>" + sum + "</b>";
+    }
+  });
+}
+
+function validateRows(rows, label) {
+  const seen = new Set();
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (r.length !== 4 || r.some(v => !Number.isInteger(v) || v < 0 || v > TOTAL)) {
+      return `${label}#${i + 1}：必须是 0～${TOTAL} 的 4 个整数克数`;
+    }
+    if (r.reduce((a, b) => a + b, 0) !== TOTAL) {
+      return `${label}#${i + 1}：总重须为 ${TOTAL} 克`;
+    }
+    const key = r.join(",");
+    if (seen.has(key)) return `${label}#${i + 1}：与同组另一条配方重复（${key}）`;
+    seen.add(key);
+  }
+  return null;
+}
+
+function readForm() {
+  syncFromDom(testedRows, "testedTable");
+  syncFromDom(candRows, "candTable");
+  const slotsRaw = $("slots").value.trim();
+  const slots = slotsRaw === "" ? NaN : Number(slotsRaw);
+  let err = null;
+  if (!(testedRows.length >= LIMITS.tested[0] && testedRows.length <= LIMITS.tested[1]))
+    err = `已检配方数量须在 ${LIMITS.tested[0]}～${LIMITS.tested[1]} 条之间`;
+  else if (!(candRows.length >= LIMITS.cand[0] && candRows.length <= LIMITS.cand[1]))
+    err = `待检配方数量须在 ${LIMITS.cand[0]}～${LIMITS.cand[1]} 条之间`;
+  else if (!Number.isInteger(slots) || slots < LIMITS.slots[0] || slots > LIMITS.slots[1])
+    err = `送检名额须为 ${LIMITS.slots[0]}～${LIMITS.slots[1]} 的整数`;
+  else err = validateRows(testedRows, "已检配方") || validateRows(candRows, "待检配方");
+  return {
+    payload: { tested: testedRows.map(r => r.slice()), candidates: candRows.map(r => r.slice()), slots },
+    err,
+  };
+}
+
+function hidePanels() {
+  for (const id of ["panelOk","panelNoRec","panelPending","panelInvalid"])
+    $(id).style.display = "none";
+}
+function showPanel(id) { hidePanels(); $(id).style.display = "block"; }
+
+async function runSelect() {
+  const my = ++epoch;
+  const { payload, err } = readForm();
+  if (err) {
+    // 校验失败不发请求；保持当前 epoch，避免任何在途/迟到响应被重新认领
+    showPanel("panelInvalid");
+    $("invalidReason").textContent = err;
+    $("status").textContent = "请修正输入后重试。";
+    return;
+  }
+  if (inflight) inflight.abort();
+  inflight = new AbortController();
+  const signal = inflight.signal;
+  hidePanels();
+  $("status").innerHTML = '<span class="spin"></span>穷举选样中…（期间可继续修改，修改将作废旧结果）';
+  $("runBtn").disabled = true;
+  let data;
+  try {
+    const resp = await fetch("/api/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    data = await resp.json();
+  } catch (e) {
+    if (my !== epoch) return;
+    $("runBtn").disabled = false;
+    if (e.name === "AbortError") return;
+    $("status").textContent = "请求失败：" + e.message;
+    return;
+  }
+  $("runBtn").disabled = false;
+  if (my !== epoch) return;   // 迟到结果：丢弃，不恢复
+  renderResult(data, payload.slots);
+}
+
+function renderResult(d, slots) {
+  if (d.status === "invalid") {
+    showPanel("panelInvalid");
+    $("invalidReason").textContent = d.reason;
+    $("status").textContent = "请修正输入后重试。";
+    return;
+  }
+  if (d.status === "pending") {
+    showPanel("panelPending");
+    $("pendingReason").textContent = d.reason;
+    $("status").textContent = "未能证明最优，保持待定，不给出送检建议。";
+    return;
+  }
+  if (d.status === "ok" && (!d.selected || d.selected.length === 0)) {
+    showPanel("panelNoRec");
+    $("noRecReason").textContent = d.reason;
+    $("status").textContent = "没有增量收益，不推荐送检。";
+    return;
+  }
+  if (d.status !== "ok") {
+    showPanel("panelPending");
+    $("pendingReason").textContent = d.reason || "未知状态";
+    return;
+  }
+  $("okK").textContent = d.selected.length;
+  $("okSlots").textContent = slots;
+  $("okLeafN").textContent = d.gain_leaves.length;
+  $("okBen").textContent = d.benefit.toFixed(6);
+  $("okBenExact").textContent = d.benefit_exact;
+  $("okReason").textContent = d.reason + `（穷举节点 ${d.nodes_visited}，耗时 ${d.elapsed_ms} ms）`;
+  $("okRows").innerHTML = d.selected.map((row, i) =>
+    `<tr><td>#${d.selected_indices[i] + 1}</td>${row.map(g => `<td><b>${g}</b></td>`).join("")}</tr>`).join("");
+  $("okLeaves").innerHTML = d.gain_leaves.map(l =>
+    `<div class="leafchip">树${l.tree + 1}-叶${l.node}<br>n=<b>${l.n_train}</b> · 1/n=${l.weight.toFixed(6)}</div>`).join("");
+  showPanel("panelOk");
+  $("status").textContent = "计算完成，以下为已证明最优的送检组合。";
+}
+
+function loadSample(smp) {
+  testedRows = smp.tested.map(r => r.slice());
+  candRows = smp.candidates.map(r => r.slice());
+  $("slots").value = smp.slots;
+  renderAll();
+  onUserEdit();
+}
+
+function appendBulk() {
+  const text = $("bulk").value.trim();
+  if (!text) return;
+  const added = [];
+  for (const line of text.split(/\n+/)) {
+    const parts = line.trim().split(/[\s,，;；]+/).filter(Boolean);
+    if (parts.length === 0) continue;
+    if (parts.length !== 4 || parts.some(p => !/^-?\d+$/.test(p))) {
+      showPanel("panelInvalid");
+      $("invalidReason").textContent = `批量行无法解析为 4 个整数：「${line}」`;
+      return;
+    }
+    added.push(parts.map(Number));
+  }
+  if (candRows.length + added.length > LIMITS.cand[1]) {
+    showPanel("panelInvalid");
+    $("invalidReason").textContent =
+      `追加后待检配方将达 ${candRows.length + added.length} 条，超过上限 ${LIMITS.cand[1]} 条，已中止追加。`;
+    return;
+  }
+  candRows = candRows.concat(added);
+  $("bulk").value = "";
+  renderAll();
+  onUserEdit();
+}
+
+async function boot() {
+  const [meta, smp] = await Promise.all([
+    fetch("/api/meta").then(r => r.json()),
+    fetch("/api/samples").then(r => r.json()),
+  ]);
+  samples = smp;
+  featureNames = meta.feature_names;
+  for (let i = 0; i < 4; i++) {
+    document.querySelectorAll(".fn" + i).forEach(th => { th.textContent = featureNames[i] + "（克）"; });
+  }
+  $("metaLine").textContent =
+    `质检模型：随机森林 ${meta.n_trees} 棵树 / 深度 ≤ ${meta.max_depth}，固定种子 ${meta.train_seed} 训练；` +
+    `输入为克数/1000 的 float32；叶收益 = 1 / 该叶训练样本数。`;
+  // 初始 10 条空待检行，方便直接填写
+  candRows = Array.from({ length: 10 }, emptyRow);
+  renderAll();
+  $("addTested").onclick = () => { if (testedRows.length < 20) { testedRows.push(emptyRow()); renderAll(); onUserEdit(); } };
+  $("addCand").onclick = () => { if (candRows.length < 60) { candRows.push(emptyRow()); renderAll(); onUserEdit(); } };
+  $("runBtn").onclick = runSelect;
+  $("sampleBtn").onclick = () => loadSample(samples.selection.useful);
+  $("noGainBtn").onclick = () => loadSample(samples.selection.no_gain);
+  $("bulkBtn").onclick = appendBulk;
+  $("clearCandBtn").onclick = () => { candRows = []; renderAll(); onUserEdit(); };
+  $("slots").addEventListener("input", onUserEdit);
+  $("slots").addEventListener("change", onUserEdit);
+}
+boot().catch(e => { $("status").textContent = "初始化失败：" + e.message; });
+</script>
+</body>
+</html>

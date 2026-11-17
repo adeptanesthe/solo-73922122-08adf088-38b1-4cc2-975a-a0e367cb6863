@@ -12,15 +12,23 @@
  5. 字典序：改 2 种（量大）与改 3 种（量小）并存时，必须返回改 2 种；
  6. 边界：原配方已合格（0 改动）、全锁定合格/不合格、各类非法输入；
  7. 求解失败路径：异常注入返回 solver_failure 而非无解；
- 8. API：/、/api/meta、/api/samples、/api/solve 各状态分支；页面含迟到结果丢弃逻辑。
+ 8. API：/、/api/meta、/api/samples、/api/solve 各状态分支；页面含迟到结果丢弃逻辑；
+ 9. 送检选样：叶路由与 sklearn apply 一致；收益 = 1/n_train；已检叶不计入、
+    同叶去重；穷举最优与同分最少条数（暴力枚举对照）；无增量不推荐；
+    预算耗尽保持 pending；非法输入；/api/select 与 /select 分支。
 """
 from __future__ import annotations
 
 import itertools
 import sys
+from functools import reduce as _reduce
 
 import numpy as np
 import z3
+
+
+def functools_reduce_or(masks):
+    return _reduce(lambda a, b: a | b, masks, 0)
 
 from app.model import (
     MAX_DEPTH,
@@ -248,6 +256,195 @@ def main():
     check("POST /api/solve 非法输入分支", r.json()["status"] == "invalid")
     html = client.get("/").text
     check("页面含迟到结果丢弃逻辑", "my !== epoch" in html and "abort" in html)
+
+    print("== 9. 送检选样 ==")
+    from fractions import Fraction
+    import app.selection as selmod
+    from app.selection import (
+        LeafRegistry,
+        SelectionInput,
+        get_registry,
+        reset_leaf_cache,
+        route_formula,
+        select,
+    )
+    reset_leaf_cache()
+    reg = get_registry(forest)
+
+    # 9.1 叶目录与 sklearn 训练样本数一致，收益精确等于 1/n_train
+    sk_counts = []
+    for est in clf.estimators_:
+        t = est.tree_
+        for nid in range(t.node_count):
+            if t.children_left[nid] == t.children_right[nid]:
+                sk_counts.append(int(t.n_node_samples[nid]))
+    check("叶数与 sklearn 叶数一致", reg.n_leaves == len(sk_counts))
+    check("n_train 与 sklearn 一致", sorted(x.n_train for x in reg.leaves) == sorted(sk_counts))
+    check("叶收益精确为 1/n_train",
+          all(x.weight == Fraction(1, x.n_train) for x in reg.leaves))
+
+    # 9.2 路由掩码与 sklearn clf.apply（float32 输入）逐配方一致
+    rng2 = np.random.default_rng(321)
+    route_ok = True
+    for _ in range(200):
+        g = rng2.multinomial(TOTAL_GRAMS, [0.3, 0.3, 0.2, 0.2]).tolist()
+        sk = clf.apply(np.array([[x / TOTAL_GRAMS for x in g]], dtype=np.float32))[0]
+        expect = 0
+        for ti, nid in enumerate(sk):
+            expect |= 1 << reg.index[(ti, int(nid))]
+        if route_formula(forest, g, reg) != expect:
+            route_ok = False
+            break
+    check("叶路由与 sklearn apply 完全一致（float32）", route_ok)
+
+    def rnd_formulas(rng, n):
+        out, seen = [], set()
+        while len(out) < n:
+            g = rng.multinomial(TOTAL_GRAMS, [0.3, 0.3, 0.2, 0.2]).tolist()
+            key = tuple(g)
+            if key not in seen:
+                seen.add(key)
+                out.append(g)
+        return out
+
+    # 9.3 useful 样例：ok 且选中非空；收益精确核对；已检叶不出现；叶不重复
+    us = samples["selection"]["useful"]
+    ru = select(forest, SelectionInput(us["tested"], us["candidates"], us["slots"]))
+    check("useful 样例返回 ok 且有推荐", ru.status == "ok" and len(ru.selected) >= 1)
+    check("选中条数不超过名额", len(ru.selected) <= us["slots"])
+    tested_mask = 0
+    for row in us["tested"]:
+        tested_mask |= route_formula(forest, row, reg)
+    check("增量叶不含任何已检叶", (ru.gain_mask & tested_mask) == 0)
+    check("增量叶无重复（位掩码天然去重）", len(ru.gain_leaves) == ru.gain_mask.bit_count())
+    exact = sum((Fraction(1, l["n_train"]) for l in ru.gain_leaves), Fraction(0))
+    check("收益 = 增量叶 1/n_train 之和（精确分数）",
+          Fraction(ru.benefit_exact) == exact and abs(ru.benefit - float(exact)) < 1e-15)
+    # 每条选中配方确实命中至少一个增量叶
+    sel_masks = [route_formula(forest, row, reg) & ~tested_mask for row in ru.selected]
+    check("每条推荐配方都贡献增量叶", all(m != 0 for m in sel_masks))
+    check("增量并集与报告掩码一致",
+          functools_reduce_or(sel_masks) == ru.gain_mask)
+
+    # 9.4 同叶多条命中只计一次：10 条不同配方全部路由到同一掩码，名额 3
+    # 任意非空组合收益完全相同 → 按“同分送检数最少”必须只推荐 1 条
+    rng_dup = np.random.default_rng(77)
+    dup_groups: dict[int, list] = {}
+    target_n = 10
+    shared_mask = None
+    shared_rows: list = []
+    while True:
+        g = rng_dup.multinomial(TOTAL_GRAMS, [0.3, 0.3, 0.2, 0.2]).tolist()
+        m = route_formula(forest, g, reg)
+        bucket = dup_groups.setdefault(m, [])
+        if all(g != x for x in bucket):
+            bucket.append(g)
+            if len(bucket) >= target_n:
+                shared_mask, shared_rows = m, [list(x) for x in bucket]
+                break
+    r_dup = select(forest, SelectionInput([], shared_rows, 3))
+    check("同掩码配方彼此不同", all(shared_rows[i] != shared_rows[j]
+                                    for i in range(target_n) for j in range(i)))
+    check("同叶去重：同掩码多条只计一次且同分取最少条数",
+          r_dup.status == "ok" and len(r_dup.selected_indices) == 1
+          and reg.mask_benefit(r_dup.gain_mask) == reg.mask_benefit(shared_mask))
+
+    # 9.5 无增量 → 不推荐送检
+    ng = samples["selection"]["no_gain"]
+    rng3_res = select(forest, SelectionInput(ng["tested"], ng["candidates"], ng["slots"]))
+    check("no_gain 样例 ok 且不推荐", rng3_res.status == "ok" and rng3_res.selected == []
+          and rng3_res.benefit == 0.0)
+
+    # 9.6 暴力枚举对照：最优收益 + 同分最少条数（多组随机数据、名额 1~5）
+    brute_ok = True
+    rng3 = np.random.default_rng(44)
+    for trial in range(12):
+        n_c = 10 + trial  # 10..21
+        pool = rnd_formulas(rng3, n_c + 4)
+        tested = [list(x) for x in pool[:4]]
+        cands = [list(x) for x in pool[4:]]
+        slots = 1 + trial % 5
+        res = select(forest, SelectionInput(tested, cands, slots))
+        tm = 0
+        for row in tested:
+            tm |= route_formula(forest, row, reg)
+        cm = [route_formula(forest, row, reg) & ~tm for row in cands]
+        best = None
+        for k in range(1, min(slots, len(cm)) + 1):
+            for combo in itertools.combinations(range(len(cm)), k):
+                m = 0
+                for i in combo:
+                    m |= cm[i]
+                b = reg.int_benefit(m)
+                if best is None or b > best[0] or (b == best[0] and k < best[1]):
+                    best = (b, k, combo)
+        if (res.status != "ok" or reg.int_benefit(res.gain_mask) != best[0]
+                or len(res.selected_indices) != best[1]):
+            brute_ok = False
+            break
+    check("12 组随机数据暴力枚举对照最优性与同分规则", brute_ok)
+
+    # 9.7 非法输入
+    valid_c = rnd_formulas(np.random.default_rng(5), 10)
+    bad_inputs = [
+        SelectionInput([], valid_c[:9], 3),                 # 待检仅 9 条
+        SelectionInput(rnd_formulas(np.random.default_rng(6), 21), valid_c, 3),  # 已检 21 条
+        SelectionInput([], valid_c, 0),                     # 名额 0
+        SelectionInput([], valid_c, 6),                     # 名额 6
+        SelectionInput([], valid_c, True),                  # bool 名额
+        SelectionInput([], [[1, 1, 1, 996]] * 10, 3),       # 总重 999
+        SelectionInput([], [["1", 2, 3, 994]] + valid_c[1:], 3),  # 非整数
+        SelectionInput([], valid_c + [valid_c[0]], 3),      # 同组重复
+    ]
+    check("非法选样输入均判 invalid",
+          all(select(forest, x).status == "invalid" for x in bad_inputs))
+    # 跨组重复允许（已检中出现过的配方仍可放在待检，只是增量为 0）
+    r_cross = select(forest, SelectionInput([list(valid_c[0])], [list(x) for x in valid_c], 3))
+    check("已检/待检跨组重复允许且正常求解", r_cross.status == "ok")
+
+    # 9.8 预算耗尽 → pending（注入极小节点预算），不给出建议
+    # 先收集掩码尽量分散的 60 条配方，保证穷举节点数必然超过预算检查点
+    rng_big = np.random.default_rng(9)
+    big, big_masks = [], set()
+    while len(big) < 60:
+        g = rng_big.multinomial(TOTAL_GRAMS, [0.3, 0.3, 0.2, 0.2]).tolist()
+        m = route_formula(forest, g, reg)
+        key = tuple(g)
+        if key not in {tuple(x) for x in big}:
+            big.append(g)
+            big_masks.add(m)
+    assert len(big_masks) >= 2
+    orig_budget = selmod.NODE_BUDGET
+    selmod.NODE_BUDGET = 50
+    try:
+        r_pend = select(forest, SelectionInput([], [list(x) for x in big], 5))
+    finally:
+        selmod.NODE_BUDGET = orig_budget
+    check("预算耗尽返回 pending 且无推荐",
+          r_pend.status == "pending" and r_pend.selected is None
+          and not r_pend.exhaustive and r_pend.nodes_visited > 50)
+
+    # 9.9 API：/select 页面、/api/leaves、/api/select 各分支
+    r = client.get("/select")
+    check("GET /select 返回选样网页", r.status_code == 200 and "送检" in r.text and "abort" in r.text)
+    r = client.get("/api/leaves")
+    lj = r.json()
+    check("GET /api/leaves", r.status_code == 200 and lj["n_leaves"] == reg.n_leaves
+          and all("weight" in x and "n_train" in x for x in lj["leaves"]))
+    r = client.post("/api/select", json={"tested": us["tested"],
+                                         "candidates": us["candidates"], "slots": us["slots"]})
+    rj = r.json()
+    check("POST /api/select ok 分支", r.status_code == 200 and rj["status"] == "ok"
+          and len(rj["selected"]) >= 1 and rj["exhaustive"] is True)
+    r = client.post("/api/select", json={"tested": ng["tested"],
+                                         "candidates": ng["candidates"], "slots": ng["slots"]})
+    check("POST /api/select 不推荐分支", r.json()["status"] == "ok"
+          and r.json()["selected"] == [])
+    r = client.post("/api/select", json={"tested": [], "candidates": valid_c[:9], "slots": 3})
+    check("POST /api/select invalid 分支", r.json()["status"] == "invalid")
+    check("选样样例由启动实测生成",
+          sj["selection"]["useful"]["check"]["status"] == "ok"
+          and sj["selection"]["no_gain"]["check"]["selected"] == [])
 
     print()
     if failures:
